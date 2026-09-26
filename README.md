@@ -252,3 +252,9 @@ databricks bundle run -t qa sales_etl_job
 | `[FAIL] ... timed out` in `check` | Connect to VPN or use the SSH tunnel (Step 6.4) |
 | `python` not found on Windows runner | Set variable `PYTHON_CMD=py` |
 | PROD job waits forever | It is waiting for approval in the `prod` environment - click **Review deployments** |
+
+
+
+## CI/CD Test
+ 
+Testing GitHub Actions CI/CD pipeline.
