@@ -1,0 +1,8 @@
+[flake8]
+max-line-length = 120
+exclude = .git,__pycache__,.venv,venv,.databricks
+# Objects that Databricks injects into notebooks automatically
+builtins = spark,dbutils,display
+# Notebooks import modules after adjusting sys.path
+per-file-ignores =
+    src/0*.py: E402

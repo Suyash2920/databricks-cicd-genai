@@ -1,0 +1,93 @@
+# =============================================================================
+# REUSABLE deployment workflow (called by cd.yml once per environment).
+#
+#   validate bundle -> deploy bundle -> run ETL job -> upload logs
+#
+# Being reusable means the SAME steps deploy QA and PROD (and can be reused
+# by other projects): only the "target" input changes.
+# =============================================================================
+name: Reusable - Databricks Bundle Deploy
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: Databricks bundle target (qa or prod)
+        required: true
+        type: string
+      environment:
+        description: GitHub Environment name (enables approvals / protection rules)
+        required: true
+        type: string
+      run_job:
+        description: Run the ETL job after deployment
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      DATABRICKS_HOST:
+        required: true
+      DATABRICKS_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.target }}
+    runs-on: ubuntu-latest
+    # If the environment has "Required reviewers", the job waits here for approval.
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      # Inputs are copied to env vars (safer than inserting ${{ }} directly into scripts).
+      TARGET: ${{ inputs.target }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Prepare logs folder
+        run: |
+          mkdir -p logs
+          databricks --version
+
+      - name: Validate bundle (${{ inputs.target }})
+        run: databricks bundle validate -t "$TARGET" 2>&1 | tee "logs/validate_${TARGET}.log"
+
+      - name: Deploy bundle (${{ inputs.target }})
+        run: databricks bundle deploy -t "$TARGET" --auto-approve 2>&1 | tee "logs/deploy_${TARGET}.log"
+
+      - name: Run ETL job (${{ inputs.target }})
+        if: inputs.run_job
+        run: databricks bundle run -t "$TARGET" sales_etl_job 2>&1 | tee "logs/run_${TARGET}.log"
+
+      - name: Write deployment summary
+        if: always()
+        run: |
+          {
+            echo "## Databricks deployment - ${TARGET}"
+            echo "| Item | Value |"
+            echo "|------|-------|"
+            echo "| Target | ${TARGET} |"
+            echo "| Catalog | ${TARGET}_catalog |"
+            echo "| Job | [${TARGET}] Sales ETL Job |"
+            echo "| Commit | ${GITHUB_SHA::7} |"
+            echo "| Triggered by | ${GITHUB_ACTOR} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload deployment logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ inputs.target }}
+          path: logs/
+          retention-days: 7

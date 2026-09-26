@@ -1,0 +1,163 @@
+# =============================================================================
+# CI - runs on every Pull Request to main and on develop / feature pushes.
+#
+#   Job 1  quality-checks   : flake8 lint -> yamllint -> bandit (SAST) -> pytest
+#   Job 2  validate-bundle  : "databricks bundle validate" for qa and prod
+#   Job 3  ai-review        : GenAI (Ollama) summarizes CI logs + reviews workflows
+#
+# This workflow is also REUSED by cd.yml (see "workflow_call").
+# =============================================================================
+name: CI - Lint, Test and Validate
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - develop
+      - "feature/**"
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      DATABRICKS_HOST:
+        required: false
+      DATABRICKS_TOKEN:
+        required: false
+      OLLAMA_USERNAME:
+        required: false
+      OLLAMA_PASSWORD:
+        required: false
+
+# Least privilege: the workflow can only read the repository.
+permissions:
+  contents: read
+
+jobs:
+  quality-checks:
+    name: Lint, Security Scan and Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        # Explicit bash enables "pipefail", so a failing command before "| tee" still fails the step.
+        shell: bash
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Set up Java 17 (required by local PySpark)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Create logs folder
+        run: mkdir -p logs
+
+      - name: Lint Python code (flake8)
+        run: flake8 src tests scripts 2>&1 | tee logs/lint.log
+
+      - name: Lint YAML files (yamllint)
+        run: yamllint .github databricks.yml resources 2>&1 | tee logs/yamllint.log
+
+      - name: Security scan - SAST (bandit)
+        run: bandit -r src scripts -ll 2>&1 | tee logs/security.log
+
+      - name: Run unit tests (pytest with local Spark)
+        run: pytest --junitxml=logs/junit.xml 2>&1 | tee logs/tests.log
+
+      - name: Upload CI logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-tests
+          path: logs/
+          retention-days: 7
+
+  validate-bundle:
+    name: Validate Databricks Bundle (qa + prod)
+    needs: quality-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Official Databricks action that installs the Databricks CLI
+      - name: Install Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Validate bundle for every environment
+        run: |
+          if [ -z "$DATABRICKS_HOST" ] || [ -z "$DATABRICKS_TOKEN" ]; then
+            echo "::warning::Databricks secrets are not configured - skipping bundle validation."
+            exit 0
+          fi
+          for target in qa prod; do
+            echo "===== Validating target: $target ====="
+            databricks bundle validate -t "$target"
+          done
+
+  ai-review:
+    name: GenAI - CI Log Summary and Workflow Review
+    needs: quality-checks
+    # Runs even when tests fail (that is when a log summary is most useful).
+    # Enable by creating the repository variable ENABLE_AI = true.
+    if: always() && vars.ENABLE_AI == 'true'
+    # Ollama servers are on the company network -> needs a self-hosted runner inside that network.
+    runs-on: self-hosted
+    # AI is an assistant, not a gate: its failure must never block the pipeline.
+    continue-on-error: true
+    timeout-minutes: 20
+    env:
+      OLLAMA_URLS: ${{ vars.OLLAMA_URLS }}
+      OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+      OLLAMA_USERNAME: ${{ secrets.OLLAMA_USERNAME }}
+      OLLAMA_PASSWORD: ${{ secrets.OLLAMA_PASSWORD }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download CI logs
+        uses: actions/download-artifact@v4
+        with:
+          name: logs-tests
+          path: downloaded_logs
+
+      - name: Check Ollama connectivity
+        continue-on-error: true
+        run: ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py check
+
+      - name: AI - Summarize CI logs
+        run: >-
+          ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py summarize-logs
+          --input-dir downloaded_logs
+          --title "CI Build and Test Summary"
+          --output ai_reports/ci_log_summary.md
+
+      - name: AI - Review workflow YAML files
+        run: ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py review-workflows --output ai_reports/workflow_review.md
+
+      - name: Upload AI reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-reports-ci
+          path: ai_reports/
+          retention-days: 14

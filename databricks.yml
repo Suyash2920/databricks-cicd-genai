@@ -1,0 +1,47 @@
+# =============================================================================
+# Databricks Asset Bundle (DAB) - the "deployment recipe" for Databricks.
+#
+# Databricks Free Edition gives us only ONE workspace, so QA and PROD are
+# separated using Unity Catalog CATALOGS:
+#   qa   target -> qa_catalog
+#   prod target -> prod_catalog
+#
+# The workspace host is NOT written here. The Databricks CLI reads it from the
+# DATABRICKS_HOST / DATABRICKS_TOKEN environment variables (GitHub Secrets).
+# =============================================================================
+bundle:
+  name: sales_etl
+
+# Job definitions live in the resources folder.
+include:
+  - resources/*.yml
+
+# Files that are NOT needed inside Databricks (keeps the upload small).
+sync:
+  exclude:
+    - tests/**
+    - scripts/**
+    - logs/**
+    - ai_reports/**
+    - downloaded_logs/**
+
+# Variables that change per environment.
+variables:
+  catalog:
+    description: Unity Catalog catalog used by the environment (qa_catalog or prod_catalog)
+    default: qa_catalog
+  schema:
+    description: Schema (database) inside the catalog
+    default: sales
+
+# Each target is one environment. Files are deployed to a separate folder per
+# target: /Workspace/Users/<you>/.bundle/sales_etl/<target>
+targets:
+  qa:
+    default: true
+    variables:
+      catalog: qa_catalog
+
+  prod:
+    variables:
+      catalog: prod_catalog

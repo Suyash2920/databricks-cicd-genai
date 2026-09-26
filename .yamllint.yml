@@ -1,0 +1,11 @@
+extends: default
+
+rules:
+  line-length:
+    max: 160
+  # GitHub Actions uses the key "on:", which yamllint would otherwise flag
+  truthy:
+    check-keys: false
+  document-start: disable
+  # Windows (CRLF) vs Linux (LF) line endings are handled by .gitattributes
+  new-lines: disable

@@ -1,0 +1,143 @@
+# =============================================================================
+# CD - runs when code is merged (pushed) to main.
+#
+#   CI  ->  Deploy QA (qa_catalog)  ->  [manual approval]  ->  Deploy PROD (prod_catalog)
+#                                                               |
+#                         GenAI release notes / deployment report / docs
+#                         Slack or Teams notification
+# =============================================================================
+name: CD - Deploy Databricks ETL (QA to PROD)
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two deployments at the same time; queue them instead.
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    secrets:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      OLLAMA_USERNAME: ${{ secrets.OLLAMA_USERNAME }}
+      OLLAMA_PASSWORD: ${{ secrets.OLLAMA_PASSWORD }}
+
+  deploy-qa:
+    name: QA
+    needs: ci
+    uses: ./.github/workflows/reusable-databricks-deploy.yml
+    with:
+      target: qa
+      environment: qa
+    secrets:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+  deploy-prod:
+    name: PROD
+    # PROD only runs after QA succeeded (and after approval on the "prod" environment).
+    needs: deploy-qa
+    uses: ./.github/workflows/reusable-databricks-deploy.yml
+    with:
+      target: prod
+      environment: prod
+    secrets:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+  ai-release-report:
+    name: GenAI - Release Notes, Deployment Report and Docs
+    needs:
+      - deploy-qa
+      - deploy-prod
+    if: always() && vars.ENABLE_AI == 'true' && needs.deploy-qa.result != 'skipped'
+    runs-on: self-hosted
+    continue-on-error: true
+    timeout-minutes: 30
+    env:
+      OLLAMA_URLS: ${{ vars.OLLAMA_URLS }}
+      OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+      OLLAMA_USERNAME: ${{ secrets.OLLAMA_USERNAME }}
+      OLLAMA_PASSWORD: ${{ secrets.OLLAMA_PASSWORD }}
+    steps:
+      - name: Checkout code (full history for release notes)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all pipeline logs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: logs-*
+          path: downloaded_logs
+          merge-multiple: true
+
+      - name: Check Ollama connectivity
+        continue-on-error: true
+        run: ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py check
+
+      - name: AI - Release notes / changelog
+        run: ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py release-notes --max-commits 20 --output ai_reports/release_notes.md
+
+      - name: AI - Deployment report (log summary)
+        run: >-
+          ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py summarize-logs
+          --input-dir downloaded_logs
+          --title "Deployment Report (QA and PROD)"
+          --output ai_reports/deployment_report.md
+
+      - name: AI - Pipeline documentation
+        run: ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py generate-docs --output ai_reports/pipeline_documentation.md
+
+      - name: Upload AI reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-reports-release
+          path: ai_reports/
+          retention-days: 30
+
+  notify:
+    name: Notify Slack / Teams
+    needs:
+      - ci
+      - deploy-qa
+      - deploy-prod
+    if: always()
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Send pipeline result
+        env:
+          WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+          CI_RESULT: ${{ needs.ci.result }}
+          QA_RESULT: ${{ needs.deploy-qa.result }}
+          PROD_RESULT: ${{ needs.deploy-prod.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          MESSAGE="Databricks CI/CD | repo: ${GITHUB_REPOSITORY} | commit: ${GITHUB_SHA::7} | by: ${GITHUB_ACTOR}"
+          MESSAGE="${MESSAGE} | CI: ${CI_RESULT} | QA: ${QA_RESULT} | PROD: ${PROD_RESULT} | ${RUN_URL}"
+
+          echo "### Pipeline result" >> "$GITHUB_STEP_SUMMARY"
+          echo "$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "::notice::NOTIFY_WEBHOOK_URL secret is not set - skipping Slack/Teams notification."
+            exit 0
+          fi
+
+          # jq builds valid JSON safely (handles quotes/special characters).
+          PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text}')
+          curl --fail --silent --show-error -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK_URL"
+          echo "Notification sent."

@@ -1,0 +1,53 @@
+# =============================================================================
+# Databricks Job: Bronze -> Silver -> Gold -> Validate
+#
+# Free Edition note: NO cluster is defined on purpose. When a job task has no
+# cluster, Databricks runs it on SERVERLESS compute, which is the only compute
+# type available in Databricks Free Edition.
+# =============================================================================
+resources:
+  jobs:
+    sales_etl_job:
+      name: "[${bundle.target}] Sales ETL Job"
+      description: "Medallion ETL (bronze/silver/gold) deployed by GitHub Actions. Catalog: ${var.catalog}"
+      max_concurrent_runs: 1
+      timeout_seconds: 3600
+      tags:
+        environment: ${bundle.target}
+        project: rtb-c16-cicd
+
+      # Job parameters are passed automatically to every notebook as widgets.
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+
+      tasks:
+        - task_key: setup_environment
+          notebook_task:
+            notebook_path: ../src/00_setup.py
+
+        - task_key: bronze_ingestion
+          depends_on:
+            - task_key: setup_environment
+          notebook_task:
+            notebook_path: ../src/01_bronze_ingestion.py
+
+        - task_key: silver_transformation
+          depends_on:
+            - task_key: bronze_ingestion
+          notebook_task:
+            notebook_path: ../src/02_silver_transformation.py
+
+        - task_key: gold_aggregation
+          depends_on:
+            - task_key: silver_transformation
+          notebook_task:
+            notebook_path: ../src/03_gold_aggregation.py
+
+        - task_key: data_validation
+          depends_on:
+            - task_key: gold_aggregation
+          notebook_task:
+            notebook_path: ../src/04_data_validation.py
