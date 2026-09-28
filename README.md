@@ -122,7 +122,7 @@ databricks-cicd-genai/
 |----------|---------|---------|
 | `ENABLE_AI` | `true` | Turns the GenAI jobs on |
 | `AI_PROVIDER` | `gemini` (default) / `ollama` | `gemini` = Google Gemini API on GitHub-hosted runners (no VPN). `ollama` = self-hosted runner |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Optional first model. Fallback order: 2.5-flash-lite, 2.0-flash, 2.0-flash-lite, then 3.x models |
+| `GEMINI_MODEL` | `gemini-3.7-flash` | Optional first model. Fallback order: gemini-3.7-flash, gemini-3.5-flash-lite, gemini-3.8-flash |
 | `OLLAMA_URLS` | `http://172.18.0.2:11434,http://172.18.0.3:11434,http://172.18.0.4:11434` | Servers tried in order (failover) |
 | `OLLAMA_MODEL` | `llama3` | Preferred model; if missing, the first installed model is used |
 | `PYTHON_CMD` | `py` (Windows) / `python3` (Linux) | Python command on the self-hosted runner (default `python`) |

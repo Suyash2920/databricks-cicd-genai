@@ -20,7 +20,7 @@ Configuration (environment variables):
   OLLAMA_USERNAME  Optional - only needed if the servers are behind a basic-auth proxy
   OLLAMA_PASSWORD  Optional - only needed if the servers are behind a basic-auth proxy
     GEMINI_API_KEY   API key for the Gemini Developer API
-    GEMINI_MODEL     Gemini model (default gemini-2.5-flash; other models are tried automatically)
+    GEMINI_MODEL     Gemini model (default gemini-3.7-flash; other models are tried automatically)
     AI_TIMEOUT       Generation timeout in seconds (default 300)
 
 Examples:
@@ -44,18 +44,16 @@ from pathlib import Path
 
 DEFAULT_URLS = "http://172.18.0.2:11434,http://172.18.0.3:11434,http://172.18.0.4:11434"
 DEFAULT_MODEL = "llama3"
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-3.7-flash"
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 # Tried in order when the preferred model is overloaded, rate-limited or not available for this key.
 GEMINI_FALLBACK_MODELS = (
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-3.6-flash",
+    "gemini-3.7-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.8-flash",
 )
-GEMINI_ATTEMPTS = 2
+GEMINI_ATTEMPTS = 3
+GEMINI_MAX_RETRY_WAIT = 60
 RETRYABLE_HTTP_CODES = (429, 500, 502, 503, 504)
 # Model-specific errors (shut down / no access / not found) -> skip to the next model.
 SKIP_MODEL_HTTP_CODES = (400, 403, 404)
@@ -180,6 +178,23 @@ def _gemini_call(model, payload=None, timeout=15):
         return json.loads(response.read().decode("utf-8"))
 
 
+def _gemini_error_details(error, attempt):
+    """Return (seconds to wait, readable message) from a Gemini HTTP error."""
+    delay, message = 10 * attempt, error.reason
+    retry_after = error.headers.get("Retry-After") if error.headers else None
+    if retry_after and retry_after.isdigit():
+        delay = int(retry_after)
+    try:
+        body = json.loads(error.read().decode("utf-8")).get("error", {})
+        message = body.get("message") or message
+        for detail in body.get("details", []):
+            if str(detail.get("@type", "")).endswith("RetryInfo"):
+                delay = float(str(detail.get("retryDelay", "0")).rstrip("s") or 0)
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return min(max(delay, 1), GEMINI_MAX_RETRY_WAIT), str(message)[:200]
+
+
 def ask_gemini(prompt, timeout):
     """Generate a response using Google's Gemini Developer API (with retries and model fallback)."""
     preferred = os.getenv("GEMINI_MODEL") or DEFAULT_GEMINI_MODEL
@@ -198,10 +213,12 @@ def ask_gemini(prompt, timeout):
             try:
                 response = _gemini_call(model, payload, timeout=timeout)
             except urllib.error.HTTPError as error:
-                errors.append(f"{model}: HTTP {error.code} {error.reason}")
+                wait, message = _gemini_error_details(error, attempt)
+                errors.append(f"{model}: HTTP {error.code} {message}")
                 if error.code in RETRYABLE_HTTP_CODES:
                     if attempt < GEMINI_ATTEMPTS:
-                        time.sleep(5 * attempt)
+                        print(f"HTTP {error.code} from '{model}', waiting {wait:.0f}s before retrying ...")
+                        time.sleep(wait)
                     continue
                 if error.code in SKIP_MODEL_HTTP_CODES:
                     break
