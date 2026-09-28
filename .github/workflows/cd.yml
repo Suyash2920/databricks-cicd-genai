@@ -26,6 +26,8 @@ jobs:
   ci:
     name: CI
     uses: ./.github/workflows/ci.yml
+    with:
+      notify: false
     secrets:
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -117,37 +119,27 @@ jobs:
           retention-days: 30
 
   notify:
-    name: Notify Slack / Teams
+    name: Notify Teams / Slack
     needs:
       - ci
       - deploy-qa
       - deploy-prod
     if: always()
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        shell: bash
+    timeout-minutes: 5
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Send pipeline result
         env:
-          WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+          NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CI_RESULT: ${{ needs.ci.result }}
           QA_RESULT: ${{ needs.deploy-qa.result }}
           PROD_RESULT: ${{ needs.deploy-prod.result }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          MESSAGE="Databricks CI/CD | repo: ${GITHUB_REPOSITORY} | commit: ${GITHUB_SHA::7} | by: ${GITHUB_ACTOR}"
-          MESSAGE="${MESSAGE} | CI: ${CI_RESULT} | QA: ${QA_RESULT} | PROD: ${PROD_RESULT} | ${RUN_URL}"
-
-          echo "### Pipeline result" >> "$GITHUB_STEP_SUMMARY"
-          echo "$MESSAGE" >> "$GITHUB_STEP_SUMMARY"
-
-          if [ -z "$WEBHOOK_URL" ]; then
-            echo "::notice::NOTIFY_WEBHOOK_URL secret is not set - skipping Slack/Teams notification."
-            exit 0
-          fi
-
-          # jq builds valid JSON safely (handles quotes/special characters).
-          PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text}')
-          curl --fail --silent --show-error -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK_URL"
-          echo "Notification sent."
+        run: >-
+          python scripts/notify.py --title "CD - Deploy Databricks ETL (QA to PROD)"
+          --result "CI=$CI_RESULT"
+          --result "QA=$QA_RESULT"
+          --result "PROD=$PROD_RESULT"
