@@ -114,12 +114,15 @@ databricks-cicd-genai/
 | `DATABRICKS_TOKEN` | Yes | Personal access token |
 | `NOTIFY_WEBHOOK_URL` | Optional | Slack or Teams incoming webhook URL |
 | `OLLAMA_USERNAME` / `OLLAMA_PASSWORD` | Optional | Only if the Ollama API is behind a login proxy. **Never** put these in code |
+| `GEMINI_API_KEY` | For AI | Free key from https://aistudio.google.com/apikey |
 
 ### Step 4 - Variables (Settings > Secrets and variables > Actions > **Variables**)
 
 | Variable | Example | Purpose |
 |----------|---------|---------|
-| `ENABLE_AI` | `true` | Turns the GenAI jobs on (set only when the self-hosted runner is online) |
+| `ENABLE_AI` | `true` | Turns the GenAI jobs on |
+| `AI_PROVIDER` | `gemini` (default) / `ollama` | `gemini` = Google Gemini API on GitHub-hosted runners (no VPN). `ollama` = self-hosted runner |
+| `GEMINI_MODEL` | `gemini-3.8-flash` | Optional Gemini model |
 | `OLLAMA_URLS` | `http://172.18.0.2:11434,http://172.18.0.3:11434,http://172.18.0.4:11434` | Servers tried in order (failover) |
 | `OLLAMA_MODEL` | `llama3` | Preferred model; if missing, the first installed model is used |
 | `PYTHON_CMD` | `py` (Windows) / `python3` (Linux) | Python command on the self-hosted runner (default `python`) |
@@ -130,7 +133,22 @@ databricks-cicd-genai/
    PROD deployment will pause until someone approves.
    > Note: required reviewers are free for **public** repos; private repos need GitHub Team/Enterprise.
 
-### Step 6 - Self-hosted runner for GenAI
+### Step 6 - GenAI provider
+
+**Option A (recommended, no VPN needed): Google Gemini API (free tier).**
+1. Create a free API key at https://aistudio.google.com/apikey.
+2. Add it as the repository **secret** `GEMINI_API_KEY` and set the variable `ENABLE_AI=true`.
+   The AI jobs then run on `ubuntu-latest`.
+
+Run it locally (VPN **off**):
+```powershell
+$env:AI_PROVIDER = "gemini"
+$env:GEMINI_API_KEY = "<your key>"   # never commit this
+py scripts/ai_assistant.py check
+py scripts/ai_assistant.py review-workflows --output ai_reports/workflow_review.md
+```
+
+**Option B: company Ollama servers (self-hosted runner, needs VPN).** Set `AI_PROVIDER=ollama`.
 The Ollama servers (`172.18.0.x`) are on the **company network**, which GitHub-hosted runners cannot reach.
 1. On a machine inside the company network/VPN: **Settings > Actions > Runners > New self-hosted runner** and follow the commands shown (Windows or Linux).
 2. Install **Python 3.9+** and **Git** on that machine.

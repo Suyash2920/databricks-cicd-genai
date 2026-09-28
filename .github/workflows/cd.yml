@@ -31,6 +31,7 @@ jobs:
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
       OLLAMA_USERNAME: ${{ secrets.OLLAMA_USERNAME }}
       OLLAMA_PASSWORD: ${{ secrets.OLLAMA_PASSWORD }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
   deploy-qa:
     name: QA
@@ -61,10 +62,13 @@ jobs:
       - deploy-qa
       - deploy-prod
     if: always() && vars.ENABLE_AI == 'true' && needs.deploy-qa.result != 'skipped'
-    runs-on: self-hosted
+    runs-on: ${{ vars.AI_PROVIDER == 'ollama' && 'self-hosted' || 'ubuntu-latest' }}
     continue-on-error: true
     timeout-minutes: 30
     env:
+      AI_PROVIDER: ${{ vars.AI_PROVIDER || 'gemini' }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
       OLLAMA_URLS: ${{ vars.OLLAMA_URLS }}
       OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
       OLLAMA_USERNAME: ${{ secrets.OLLAMA_USERNAME }}
@@ -82,22 +86,28 @@ jobs:
           path: downloaded_logs
           merge-multiple: true
 
-      - name: Check Ollama connectivity
+      # PYTHON_CMD (e.g. "py") applies only to the Windows self-hosted runner used for Ollama.
+      - name: Check AI connectivity
         continue-on-error: true
-        run: ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py check
+        run: ${{ vars.AI_PROVIDER == 'ollama' && vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py check
 
       - name: AI - Release notes / changelog
-        run: ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py release-notes --max-commits 20 --output ai_reports/release_notes.md
+        run: >-
+          ${{ vars.AI_PROVIDER == 'ollama' && vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py release-notes
+          --max-commits 20
+          --output ai_reports/release_notes.md
 
       - name: AI - Deployment report (log summary)
         run: >-
-          ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py summarize-logs
+          ${{ vars.AI_PROVIDER == 'ollama' && vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py summarize-logs
           --input-dir downloaded_logs
           --title "Deployment Report (QA and PROD)"
           --output ai_reports/deployment_report.md
 
       - name: AI - Pipeline documentation
-        run: ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py generate-docs --output ai_reports/pipeline_documentation.md
+        run: >-
+          ${{ vars.AI_PROVIDER == 'ollama' && vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py generate-docs
+          --output ai_reports/pipeline_documentation.md
 
       - name: Upload AI reports
         uses: actions/upload-artifact@v4
