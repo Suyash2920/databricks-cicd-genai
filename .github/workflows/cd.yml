@@ -31,6 +31,7 @@ jobs:
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
       OLLAMA_USERNAME: ${{ secrets.OLLAMA_USERNAME }}
       OLLAMA_PASSWORD: ${{ secrets.OLLAMA_PASSWORD }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
   deploy-qa:
     name: QA
@@ -61,10 +62,13 @@ jobs:
       - deploy-qa
       - deploy-prod
     if: always() && vars.ENABLE_AI == 'true' && needs.deploy-qa.result != 'skipped'
-    runs-on: self-hosted
+    runs-on: ${{ vars.AI_PROVIDER == 'ollama' && 'self-hosted' || 'ubuntu-latest' }}
     continue-on-error: true
     timeout-minutes: 30
     env:
+      AI_PROVIDER: ${{ vars.AI_PROVIDER || 'gemini' }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
       OLLAMA_URLS: ${{ vars.OLLAMA_URLS }}
       OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
       OLLAMA_USERNAME: ${{ secrets.OLLAMA_USERNAME }}
@@ -82,7 +86,7 @@ jobs:
           path: downloaded_logs
           merge-multiple: true
 
-      - name: Check Ollama connectivity
+      - name: Check AI connectivity
         continue-on-error: true
         run: ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py check
 

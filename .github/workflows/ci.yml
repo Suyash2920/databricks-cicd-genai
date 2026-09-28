@@ -3,7 +3,7 @@
 #
 #   Job 1  quality-checks   : flake8 lint -> yamllint -> bandit (SAST) -> pytest
 #   Job 2  validate-bundle  : "databricks bundle validate" for qa and prod
-#   Job 3  ai-review        : GenAI (Ollama) summarizes CI logs + reviews workflows
+#   Job 3  ai-review        : GenAI (Gemini or Ollama) summarizes CI logs + reviews workflows
 #
 # This workflow is also REUSED by cd.yml (see "workflow_call").
 # =============================================================================
@@ -27,6 +27,8 @@ on:
       OLLAMA_USERNAME:
         required: false
       OLLAMA_PASSWORD:
+        required: false
+      GEMINI_API_KEY:
         required: false
 
 # Least privilege: the workflow can only read the repository.
@@ -121,12 +123,15 @@ jobs:
     # Runs even when tests fail (that is when a log summary is most useful).
     # Enable by creating the repository variable ENABLE_AI = true.
     if: always() && vars.ENABLE_AI == 'true'
-    # Ollama servers are on the company network -> needs a self-hosted runner inside that network.
-    runs-on: self-hosted
+    # Gemini (default) works on GitHub-hosted runners; Ollama needs a self-hosted runner on the company network.
+    runs-on: ${{ vars.AI_PROVIDER == 'ollama' && 'self-hosted' || 'ubuntu-latest' }}
     # AI is an assistant, not a gate: its failure must never block the pipeline.
     continue-on-error: true
     timeout-minutes: 20
     env:
+      AI_PROVIDER: ${{ vars.AI_PROVIDER || 'gemini' }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
       OLLAMA_URLS: ${{ vars.OLLAMA_URLS }}
       OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
       OLLAMA_USERNAME: ${{ secrets.OLLAMA_USERNAME }}
@@ -141,7 +146,7 @@ jobs:
           name: logs-tests
           path: downloaded_logs
 
-      - name: Check Ollama connectivity
+      - name: Check AI connectivity
         continue-on-error: true
         run: ${{ vars.PYTHON_CMD || 'python' }} scripts/ai_assistant.py check
 
