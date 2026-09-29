@@ -19,6 +19,12 @@ on:
       - "feature/**"
   workflow_dispatch:
   workflow_call:
+    inputs:
+      notify:
+        description: Send a Teams/Slack message for CI (the caller may send its own instead)
+        required: false
+        type: boolean
+        default: true
     secrets:
       DATABRICKS_HOST:
         required: false
@@ -169,3 +175,27 @@ jobs:
           name: ai-reports-ci
           path: ai_reports/
           retention-days: 14
+
+  notify:
+    name: Notify Teams / Slack
+    needs:
+      - quality-checks
+      - validate-bundle
+    # inputs.notify is empty on push/PR (format -> ''), so this runs unless a caller passes notify: false.
+    if: always() && format('{0}', inputs.notify) != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Send pipeline result
+        env:
+          NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TESTS_RESULT: ${{ needs.quality-checks.result }}
+          VALIDATE_RESULT: ${{ needs.validate-bundle.result }}
+        run: >-
+          python scripts/notify.py --title "CI - Lint, Test and Validate"
+          --result "Lint + Tests=$TESTS_RESULT"
+          --result "Bundle validate=$VALIDATE_RESULT"

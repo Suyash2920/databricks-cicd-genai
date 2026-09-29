@@ -112,7 +112,7 @@ databricks-cicd-genai/
 |--------|----------|-------|
 | `DATABRICKS_HOST` | Yes | Workspace URL |
 | `DATABRICKS_TOKEN` | Yes | Personal access token |
-| `NOTIFY_WEBHOOK_URL` | Optional | Slack or Teams incoming webhook URL |
+| `NOTIFY_WEBHOOK_URL` | Optional | Teams **Workflows** webhook URL ("Send webhook alerts to a channel") or Slack incoming webhook |
 | `OLLAMA_USERNAME` / `OLLAMA_PASSWORD` | Optional | Only if the Ollama API is behind a login proxy. **Never** put these in code |
 | `GEMINI_API_KEY` | For AI | Free key from https://aistudio.google.com/apikey |
 
